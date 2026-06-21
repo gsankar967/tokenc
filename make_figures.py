@@ -26,6 +26,10 @@ nz = tc.run_ratio_sweep(client, EVAL, RATIOS, model=M,
                         compress_fn=lambda c, q, r: nc.compress(c, q, r).text)
 hy = tc.run_ratio_sweep(client, EVAL, [0.15], model=M,
                         compress_fn=lambda c, q, r: nc.compress_hybrid(client, c, q, r).text)[0]
+HYR = [0.5, 0.4, 0.3, 0.2, 0.15, 0.1]
+hys = [tc.run_ratio_sweep(client, EVAL, [t], model=M,
+                          compress_fn=lambda c, q, r: nc.compress_hybrid(client, c, q, r).text)[0]
+       for t in HYR]
 
 full_acc, full_tok = bm[0].accuracy * 100, bm[0].avg_in_tokens
 def at(res, t): return min(res, key=lambda r: abs(r.ratio_target - t))
@@ -63,13 +67,13 @@ ax.plot([r.avg_in_tokens for r in bm], [r.accuracy * 100 for r in bm],
         "o-", color="#cc4444", label="BM25 (classical)")
 ax.plot([r.avg_in_tokens for r in nz], [r.accuracy * 100 for r in nz],
         "s-", color="#2277aa", label="trained model (extractive)")
-ax.scatter([hy.avg_in_tokens], [hy.accuracy * 100], marker="*", s=520,
-           color="#22aa88", edgecolors="#0b5", linewidths=1.2, zorder=6,
-           label="hybrid (model + rephrase)")
-ax.annotate(f"hybrid\n{hy.accuracy*100:.0f}% @ {hy.avg_in_tokens:.0f} tok",
-            (hy.avg_in_tokens, hy.accuracy * 100),
-            textcoords="offset points", xytext=(16, -2), ha="left", va="center",
-            fontsize=10.5, color="#137a57", fontweight="bold")
+hx = [h.avg_in_tokens for h in hys]
+hya = [h.accuracy * 100 for h in hys]
+ax.scatter(hx, hya, marker="*", s=300, color="#22aa88", edgecolors="#0b5",
+           linewidths=1.0, zorder=6, label="hybrid (model + rephrase) — every budget")
+ax.annotate("hybrid: every budget collapses\nto ~80 tok at 90-100%\n(the rephrase hits a floor)",
+            (max(hx), min(hya)), textcoords="offset points", xytext=(20, -10),
+            ha="left", va="center", fontsize=10, color="#137a57", fontweight="bold")
 ax.scatter([full_tok], [full_acc], color="#000000", zorder=5)
 ax.annotate("full context", (full_tok, full_acc),
             textcoords="offset points", xytext=(-8, 8), ha="right", fontsize=10)
