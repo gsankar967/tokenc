@@ -96,3 +96,19 @@ class NeuralCompressor:
         text = " ".join(sents[i] for i in sorted(kept))
         return tc.Compressed(text, query, "neural", orig, token_fn(text),
                              len(sents), len(kept))
+
+    def compress_hybrid(self, client, context, query, target_ratio=0.2,
+                        extract_ratio=None, model=tc.COMPRESSOR_MODEL,
+                        token_fn=tc.estimate_tokens):
+        """Hybrid: the trained model does the cheap local bulk cut (extractive,
+        no hallucination), then a small LLM rephrases only the surviving text
+        into dense facts for the last mile. The rephrase runs on a small,
+        already-relevant input — so it's cheap and has little room to hallucinate."""
+        orig = token_fn(context)
+        if extract_ratio is None:
+            extract_ratio = min(1.0, target_ratio * 2.5)
+        pruned = self.compress(context, query, extract_ratio, token_fn)
+        budget = max(20, int(round(orig * target_ratio)))
+        text = tc.densify(client, pruned.text, query, budget, model)
+        return tc.Compressed(text, query, "hybrid", orig, token_fn(text),
+                             pruned.n_units_total, pruned.n_units_kept)

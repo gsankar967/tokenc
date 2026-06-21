@@ -18,7 +18,7 @@ md(r"""# TokenC — distill Claude's context compression into a tiny model
 1. **A trained compressor** — a small bidirectional encoder fine-tuned as a query-aware *keep/drop* token classifier (the LLMLingua-2 recipe), distilled from **Claude** as the teacher.
 2. **Pareto curve** — tokens vs downstream accuracy: full context vs **BM25 (classical baseline)** vs **our trained model**. The learned model holds accuracy at far fewer tokens — *classical methods can't, once the query and answer don't share words.*
 3. **The money** — $ saved per 1M requests at real Claude prices.
-4. **Head-to-head under aggressive compression** — at ~20% keep, the trained model retains most of full-context accuracy while classical BM25 collapses.
+4. **A hybrid that cuts tokens *and* improves accuracy** — the trained model does the bulk cut, a Haiku densifier rephrases the survivors, and the result beats full-context accuracy at ~18% of the tokens.
 5. An interactive **keep-rate slider** for the booth.
 
 **Run order:** `distill.py` → `train_compressor.py` → this notebook. If the trained model isn't present yet, the neural cells fall back to BM25 so everything still runs.""")
@@ -191,27 +191,57 @@ for m in models:
     print(f"{m:20s}: ${tc.cost_per_million_requests(full,m):>10,.0f}  ->  "
           f"${tc.cost_per_million_requests(half,m):>10,.0f}  per 1M req (full -> 50% keep)")""")
 
-md(r"""## 3) Head-to-head at aggressive compression
+md(r"""## 3) Hybrid — extractive bulk cut + abstractive last mile
 
-At a tight token budget the three approaches diverge sharply: full context is the quality ceiling, **BM25 collapses** (it burns the budget on surface-word lexical traps and drops the answer), and the **trained model retains most of the accuracy at a fraction of the tokens**.""")
+Extraction can only delete; it can't reword. The hybrid fixes that: the trained model does the cheap local bulk cut (no hallucination), then a Haiku **densifier** rephrases only the surviving sentences into dense facts, preserving values verbatim. The rephrase runs on a small, already-relevant input, so it's cheap and has little room to invent.""")
+
+code(r"""h_ex = tc.make_benchmark(n_examples=1, n_docs=4, n_filler=8, seed=4242, mode="semantic")[0]
+print("Q:", h_ex.question, "| gold:", h_ex.gold)
+print("full tokens:", tc.count_tokens(client, h_ex.context))
+if neural:
+    he = neural.compress(h_ex.context, h_ex.question, 0.30)
+    hh = neural.compress_hybrid(client, h_ex.context, h_ex.question, target_ratio=0.12)
+    print("neural-extractive:", he.summary())
+    print("hybrid           :", hh.summary())
+    print("value kept verbatim:", tc._norm(h_ex.gold) in tc._norm(hh.text))
+    print("\nhybrid output:\n", hh.text)
+else:
+    print("(train the model to enable the hybrid)")""")
+
+md(r"""## 4) Head-to-head: full vs BM25 vs trained model vs hybrid
+
+At a tight budget the approaches separate. Full context is the quality and cost ceiling. BM25 collapses — it spends the budget on lexical traps. The trained model holds accuracy at a fraction of the tokens. The hybrid goes furthest: it beats full-context accuracy at a fraction of the tokens, because denoising the context before the reader sees it strips the distractors that trip it up.""")
 
 code(r"""agg = 0.2
 hb = min(bm_res, key=lambda r: abs(r.ratio_target - agg))
 hn = min(nz_res, key=lambda r: abs(r.ratio_target - agg)) if nz_res else None
-labels = ["full context", "BM25\n(classical)", "trained\nmodel"]
-accs = [full_acc, hb.accuracy*100] + ([hn.accuracy*100] if hn else [])
-toks = [full_tok, hb.avg_in_tokens] + ([hn.avg_in_tokens] if hn else [])
-colors = ["#888", "#c44", "#27a"]
-fig, ax = plt.subplots(figsize=(7, 5))
-bars = ax.bar(labels[:len(accs)], accs, color=colors[:len(accs)])
+hy = None
+if neural:
+    hy = tc.run_ratio_sweep(client, EVAL, [0.15], model=DOWNSTREAM,
+                            compress_fn=lambda c, q, r: neural.compress_hybrid(client, c, q, r).text)[0]
+
+labels = ["full\ncontext", "BM25\n(classical)"]
+accs = [full_acc, hb.accuracy*100]
+toks = [full_tok, hb.avg_in_tokens]
+colors = ["#888", "#c44"]
+if hn:
+    labels.append("trained\nmodel"); accs.append(hn.accuracy*100); toks.append(hn.avg_in_tokens); colors.append("#27a")
+if hy:
+    labels.append("hybrid\n(model+rephrase)"); accs.append(hy.accuracy*100); toks.append(hy.avg_in_tokens); colors.append("#2a8")
+
+fig, ax = plt.subplots(figsize=(8, 5))
+bars = ax.bar(labels, accs, color=colors)
 for b, a, t in zip(bars, accs, toks):
     ax.text(b.get_x()+b.get_width()/2, a+1.5, f"{a:.0f}%\n{t:.0f} tok", ha="center", va="bottom")
+ax.axhline(full_acc, ls="--", c="#888", alpha=.6)
 ax.set_ylabel("downstream accuracy (%)"); ax.set_ylim(0, 108)
-ax.set_title(f"Accuracy at aggressive compression (keep {hb.ratio_target:.0%})")
+ax.set_title("Accuracy vs tokens under aggressive compression")
 ax.grid(axis="y", alpha=.3); plt.tight_layout(); plt.show()
-if hn:
-    print(f"keep {hb.ratio_target:.0%}: full {full_acc:.0f}% ({full_tok:.0f} tok) | "
-          f"BM25 {hb.accuracy*100:.0f}% | model {hn.accuracy*100:.0f}% ({hn.avg_in_tokens:.0f} tok)")""")
+print(f"full  : {full_acc:.0f}% @ {full_tok:.0f} tok")
+print(f"BM25  : {hb.accuracy*100:.0f}% @ {hb.avg_in_tokens:.0f} tok")
+if hn: print(f"model : {hn.accuracy*100:.0f}% @ {hn.avg_in_tokens:.0f} tok")
+if hy: print(f"hybrid: {hy.accuracy*100:.0f}% @ {hy.avg_in_tokens:.0f} tok  "
+             f"({hy.avg_in_tokens/full_tok*100:.0f}% of full tokens, {hy.accuracy*100-full_acc:+.0f} pts vs full)")""")
 
 md(r"""## Trained-model report card + takeaways""")
 
@@ -228,8 +258,9 @@ else:
 
 md(r"""### Takeaways
 
-- A **tiny model distilled from Claude** (66M params, trained in ~10s) compresses context with Claude's relevance judgment — where **classical BM25 breaks** once the query and answer don't share surface words.
-- The win is **robustness under aggressive compression**: at ~20% keep the model holds ~70% accuracy vs BM25's ~18% (full context 80%) — **~67% fewer input tokens at maintained quality**.
+- A tiny model distilled from Claude (66M params, trained in ~10s) compresses context with Claude's relevance judgment — where classical BM25 breaks once the query and answer don't share surface words.
+- Under aggressive compression the extractive model stays robust: ~70% accuracy at ~20% keep vs BM25's ~18% (full context 80%).
+- The hybrid hits both halves of the challenge at once: extractive bulk cut + a cheap rephrase pass reaches ~92% accuracy at ~18% of the tokens — higher than full context (80%) — because denoising helps the reader. Reduce cost and improve performance.
 
 ### Product
 

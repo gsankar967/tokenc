@@ -268,42 +268,39 @@ def compress_extractive(
 # Strategy 2: LLM densifier (Haiku rewrites the pre-filtered context into dense
 # query-relevant facts). Optional — costs tokens/latency but compresses harder.
 # ----------------------------------------------------------------------------
-def compress_llm(
-    client,
-    context: str,
-    query: str,
-    target_ratio: float = 0.3,
-    model: str = COMPRESSOR_MODEL,
-    token_fn=estimate_tokens,
-) -> Compressed:
-    orig_tokens = token_fn(context)
-    # Pre-filter extractively to ~2x budget so the densifier sees the right text.
-    pre = compress_extractive(context, query, min(1.0, target_ratio * 2), token_fn)
-    budget = max(20, int(round(orig_tokens * target_ratio)))
+def densify(client, text: str, query: str, budget_tokens: int,
+            model: str = COMPRESSOR_MODEL) -> str:
+    """Abstractive last mile: have a small LLM rewrite already-relevant text into
+    dense, query-focused facts. Preserves values verbatim; output is cached."""
     sys = (
         "You compress context for a downstream model. Given a QUERY and TEXT, "
         "output only the facts from TEXT needed to answer the QUERY, as terse "
         "bullet points. Preserve names, numbers, and exact values verbatim. "
-        f"Stay under roughly {budget} tokens. Output nothing else."
+        f"Stay under roughly {budget_tokens} tokens. Output nothing else."
     )
-    user = f"QUERY: {query}\n\nTEXT:\n{pre.text}"
+    user = f"QUERY: {query}\n\nTEXT:\n{text}"
     key = f"densify::{model}::{sys}::{user}"
     hit = _CACHE.get(key)
     if hit is not None:
-        text = hit["text"]
-    else:
-        resp = client.messages.create(
-            model=model,
-            max_tokens=min(2048, budget + 200),
-            system=sys,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        _CACHE.set(key, {"text": text})
-    return Compressed(
-        text, query, "llm", orig_tokens, token_fn(text),
-        pre.n_units_total, pre.n_units_total,
+        return hit["text"]
+    resp = client.messages.create(
+        model=model, max_tokens=min(2048, budget_tokens + 200),
+        system=sys, messages=[{"role": "user", "content": user}],
     )
+    out = "".join(b.text for b in resp.content if b.type == "text").strip()
+    _CACHE.set(key, {"text": out})
+    return out
+
+
+def compress_llm(client, context, query, target_ratio=0.3,
+                 model=COMPRESSOR_MODEL, token_fn=estimate_tokens) -> Compressed:
+    """Extract (BM25) then rephrase (densify). The neural extract+rephrase hybrid
+    lives in neural.NeuralCompressor.compress_hybrid."""
+    orig = token_fn(context)
+    pre = compress_extractive(context, query, min(1.0, target_ratio * 2), token_fn)
+    text = densify(client, pre.text, query, max(20, int(round(orig * target_ratio))), model)
+    return Compressed(text, query, "llm", orig, token_fn(text),
+                      pre.n_units_total, pre.n_units_total)
 
 
 def compress(context, query, target_ratio=0.5, strategy="extractive", client=None,
