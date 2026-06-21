@@ -63,8 +63,13 @@ ax.plot([r.avg_in_tokens for r in bm], [r.accuracy * 100 for r in bm],
         "o-", color="#cc4444", label="BM25 (classical)")
 ax.plot([r.avg_in_tokens for r in nz], [r.accuracy * 100 for r in nz],
         "s-", color="#2277aa", label="trained model (extractive)")
-ax.scatter([hy.avg_in_tokens], [hy.accuracy * 100], marker="*", s=320,
-           color="#22aa88", zorder=5, label="hybrid (model + rephrase)")
+ax.scatter([hy.avg_in_tokens], [hy.accuracy * 100], marker="*", s=520,
+           color="#22aa88", edgecolors="#0b5", linewidths=1.2, zorder=6,
+           label="hybrid (model + rephrase)")
+ax.annotate(f"hybrid\n{hy.accuracy*100:.0f}% @ {hy.avg_in_tokens:.0f} tok",
+            (hy.avg_in_tokens, hy.accuracy * 100),
+            textcoords="offset points", xytext=(16, -2), ha="left", va="center",
+            fontsize=10.5, color="#137a57", fontweight="bold")
 ax.scatter([full_tok], [full_acc], color="#000000", zorder=5)
 ax.annotate("full context", (full_tok, full_acc),
             textcoords="offset points", xytext=(-8, 8), ha="right", fontsize=10)
