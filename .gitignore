@@ -1,0 +1,11 @@
+# secrets — never commit
+.env
+
+# caches / artifacts
+.tokenc_cache/
+compressor_model/
+data/
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

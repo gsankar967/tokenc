@@ -1,0 +1,5 @@
+anthropic>=0.69
+numpy
+matplotlib
+jupyter
+ipykernel
